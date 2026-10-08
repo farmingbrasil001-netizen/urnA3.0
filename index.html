@@ -489,6 +489,7 @@
         let peer = null;
         let hostConn = null;
         let myVoterToken = getOrCreateVoterToken();
+        let currentRoomId = "";
 
         function getOrCreateVoterToken() {
             let token = localStorage.getItem('urna_voter_token');
@@ -533,10 +534,15 @@
         function setupHostPeer() {
             // Generate a readable 5-character room code
             const roomCode = 'URNA-' + Math.floor(1000 + Math.random() * 9000);
+            currentRoomId = roomCode;
             peer = new Peer(roomCode);
 
-            peer.on('open', (id) => {
+            // Carregamento Fake de 3 segundos
+            setTimeout(() => {
                 hideLoading();
+            }, 3000);
+
+            peer.on('open', (id) => {
                 document.getElementById('roomCodeDisplay').innerText = id;
                 document.getElementById('connDot').className = "w-2.5 h-2.5 rounded-full bg-green-500";
                 document.getElementById('connText').innerText = "Host Ativo (Servidor)";
@@ -549,6 +555,8 @@
                     width: 50,
                     height: 50
                 });
+
+                checkVotedState();
             });
 
             peer.on('connection', (conn) => {
@@ -558,25 +566,29 @@
             });
 
             peer.on('error', (err) => {
-                hideLoading();
                 showToast("Erro de Conexão WebRTC: " + err.type, "error");
             });
         }
 
         function connectToHost(hostId) {
+            currentRoomId = hostId;
             document.getElementById('roomCodeDisplay').innerText = hostId;
             document.getElementById('connText').innerText = "Conectando ao Host...";
             
+            // Carregamento Fake de 3 segundos
+            setTimeout(() => {
+                hideLoading();
+            }, 3000);
+
             peer = new Peer();
 
             peer.on('open', () => {
                 hostConn = peer.connect(hostId);
 
                 hostConn.on('open', () => {
-                    hideLoading();
                     document.getElementById('connDot').className = "w-2.5 h-2.5 rounded-full bg-green-500";
-                    document.getElementById('connText').innerText = "Conectado à Urna Principal";
-                    showToast("Conectado à Urna do Host com sucesso!");
+                    document.getElementById('connText').innerText = "Conectado à Urna " + hostId;
+                    showToast("Conectado à Urna " + hostId + "!");
 
                     // Request initial sync data
                     hostConn.send({ type: 'REQ_SYNC', token: myVoterToken });
@@ -593,37 +605,7 @@
             });
 
             peer.on('error', (err) => {
-                hideLoading();
                 showToast("Não foi possível conectar ao Host: " + err.type, "error");
-            });
-        }
-
-        function connectToHost(hostId) {
-            document.getElementById('roomCodeDisplay').innerText = hostId;
-            document.getElementById('connText').innerText = "Conectando ao Host...";
-            
-            peer = new Peer();
-
-            peer.on('open', () => {
-                hostConn = peer.connect(hostId);
-
-                hostConn.on('open', () => {
-                    document.getElementById('connDot').className = "w-2.5 h-2.5 rounded-full bg-green-500";
-                    document.getElementById('connText').innerText = "Conectado à Urna Principal";
-                    showToast("Conectado à Urna do Host!");
-
-                    // Request initial sync data
-                    hostConn.send({ type: 'REQ_SYNC', token: myVoterToken });
-                });
-
-                hostConn.on('data', (data) => {
-                    handleIncomingMessage(data, hostConn);
-                });
-
-                hostConn.on('close', () => {
-                    document.getElementById('connDot').className = "w-2.5 h-2.5 rounded-full bg-red-500";
-                    document.getElementById('connText').innerText = "Desconectado do Host";
-                });
             });
         }
 
@@ -647,8 +629,10 @@
                 electionState.candidates = data.state.candidates;
                 updateHeaderInfo();
 
-                if (data.hasVoted) {
+                if (data.hasVoted || hasAlreadyVotedLocally()) {
                     showAlreadyVotedScreen();
+                } else {
+                    document.getElementById('alreadyVotedOverlay').classList.add('hidden');
                 }
             } else if (data.type === 'CAST_VOTE') {
                 // Host receives a vote submission
@@ -794,7 +778,9 @@
 
         function showFimScreen() {
             document.getElementById('fimOverlay').classList.remove('hidden');
-            localStorage.setItem('voted_' + electionState.title, 'true');
+            if (currentRoomId) {
+                localStorage.setItem('voted_room_' + currentRoomId, 'true');
+            }
             setTimeout(() => {
                 document.getElementById('fimOverlay').classList.add('hidden');
                 showAlreadyVotedScreen();
@@ -810,7 +796,16 @@
         }
 
         function hasAlreadyVotedLocally() {
-            return electionState.votedTokens.includes(myVoterToken) || localStorage.getItem('voted_' + electionState.title) === 'true';
+            if (!currentRoomId) return false;
+            return localStorage.getItem('voted_room_' + currentRoomId) === 'true';
+        }
+
+        function checkVotedState() {
+            if (hasAlreadyVotedLocally()) {
+                showAlreadyVotedScreen();
+            } else {
+                document.getElementById('alreadyVotedOverlay').classList.add('hidden');
+            }
         }
 
         function isTimeExpired() {
@@ -1091,9 +1086,7 @@
             updateHeaderInfo();
             initWebRTC();
 
-            if (hasAlreadyVotedLocally()) {
-                showAlreadyVotedScreen();
-            } else if (isTimeExpired()) {
+            if (isTimeExpired()) {
                 showExpiredScreen();
             }
         };
